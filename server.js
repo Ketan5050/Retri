@@ -5,22 +5,13 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const axios = require("axios");
-const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const app = express();
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 
-// SMTP Configuration
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
+// Replaced Nodemailer SMTP setup with our powerful free Webhook!
+const GOOGLE_APPS_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbwi9puTWR1bx73sp4Zh2INAiQAFID3-qJEqiCBikKBsBsvZrLKk4qV8HNUcB5RhRSAd/exec";
 
 // Middleware
 app.use(cors());
@@ -251,11 +242,13 @@ app.get("/api/items/:id/matches", async (req, res) => {
               `
             };
 
-            await transporter.sendMail(mailOptions);
+            // Call the Google Apps Script Webhook securely via HTTPS 
+            // This safely bypasses Render's free tier ban on SMTP!
+            await axios.post(GOOGLE_APPS_SCRIPT_WEBHOOK, mailOptions);
             console.log(`Email sent for match between ${originalItem._id} and ${item._id}`);
           }
         } catch (emailError) {
-          console.error('Error sending email:', emailError.message);
+          console.error('Error sending email through webhook:', emailError.message);
         }
       }
     }
