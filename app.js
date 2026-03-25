@@ -33,7 +33,7 @@ class RetrievixApp {
         const options = { method, headers: { "Content-Type": "application/json" } };
         if (body) options.body = JSON.stringify(body);
         try {
-            const res = await fetch(`https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/${endpoint}`, options);
+            const res = await fetch(`https://retri-my5g.onrender.com/api/${endpoint}`, options);
             return await res.json();
         } catch (err) {
             console.error("API Error:", err);
@@ -400,7 +400,7 @@ class RetrievixApp {
 
     async loadItems() {
         // Fetch items by tab
-        const res = await fetch(`https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items?type=${this.currentTab}`);
+        const res = await fetch(`https://retri-my5g.onrender.com/api/items?type=${this.currentTab}`);
         const data = await res.json();
         const allItems = Array.isArray(data.items) ? data.items : [];
 
@@ -490,7 +490,7 @@ class RetrievixApp {
     // ====== Item Detail ======
     async showItemDetail(itemId) {
         try {
-            const res = await fetch(`https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items/${itemId}`);
+            const res = await fetch(`https://retri-my5g.onrender.com/api/items/${itemId}`);
             const data = await res.json();
             if (!data.success || !data.item) {
                 this.showToast('error', 'Not Found', 'Item not found');
@@ -577,8 +577,8 @@ class RetrievixApp {
     async loadMyItems() {
         // Fetch both types, then filter on client by userId
         const [lostRes, foundRes] = await Promise.all([
-            fetch('https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items?type=lost'),
-            fetch('https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items?type=found')
+            fetch('https://retri-my5g.onrender.com/api/items?type=lost'),
+            fetch('https://retri-my5g.onrender.com/api/items?type=found')
         ]);
         const lostData = await lostRes.json();
         const foundData = await foundRes.json();
@@ -626,8 +626,8 @@ class RetrievixApp {
 
   // 1. Get user's own reported items
   const [lostRes, foundRes] = await Promise.all([
-    fetch('https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items?type=lost'),
-    fetch('https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items?type=found')
+    fetch('https://retri-my5g.onrender.com/api/items?type=lost'),
+    fetch('https://retri-my5g.onrender.com/api/items?type=found')
   ]);
   const lostData = await lostRes.json();
   const foundData = await foundRes.json();
@@ -644,7 +644,7 @@ class RetrievixApp {
 
   // 2. Create a list of promises to fetch matches for each user item
   const matchPromises = userItems.map(item =>
-    fetch(`https://YOUR_DEPLOYED_NODEJS_BACKEND_URL/api/items/${item._id}/matches`)
+    fetch(`https://retri-my5g.onrender.com/api/items/${item._id}/matches`)
       .then(res => res.json())
       .then(data => data.success ? data.items : [])
   );
