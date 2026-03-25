@@ -620,77 +620,95 @@ class RetrievixApp {
         }
     }
 
-   async loadMatchSuggestions() {
-  const container = document.getElementById('matchSuggestions');
-  if (!container) return;
+    async loadMatchSuggestions() {
+        const container = document.getElementById('matchSuggestions');
+        if (!container) return;
 
-  // 1. Get user's own reported items
-  const [lostRes, foundRes] = await Promise.all([
-    fetch('https://retri-my5g.onrender.com/api/items?type=lost'),
-    fetch('https://retri-my5g.onrender.com/api/items?type=found')
-  ]);
-  const lostData = await lostRes.json();
-  const foundData = await foundRes.json();
+        // Show a beautiful loading message and spinner while servers wake up
+        container.innerHTML = `
+            <div style="text-align: center; padding: 2rem;">
+                <div style="border: 3px solid rgba(0,0,0,0.1); border-top: 3px solid var(--color-primary, #007bff); border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto 1rem;"></div>
+                <p style="color: #666; margin-bottom: 0.5rem; font-weight: 500;">Searching for AI Matches...</p>
+                <p style="color: #aaa; font-size: 0.85rem; margin-top: 0;">(May take up to 2 mins for free cloud servers to wake up)</p>
+                <style>@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
+            </div>
+        `;
 
-  const userItems = [
-    ...(lostData.items || []).filter(i => i.userId === this.currentUser._id),
-    ...(foundData.items || []).filter(i => i.userId === this.currentUser._id)
-  ];
+        try {
+            // 1. Get user's own reported items
+            const [lostRes, foundRes] = await Promise.all([
+                fetch('https://retri-my5g.onrender.com/api/items?type=lost'),
+                fetch('https://retri-my5g.onrender.com/api/items?type=found')
+            ]);
+            
+            const lostData = await lostRes.json();
+            const foundData = await foundRes.json();
 
-  if (userItems.length === 0) {
-    container.innerHTML = '<p>Report an item to see match suggestions.</p>';
-    return;
-  }
+            const userItems = [
+                ...(lostData.items || []).filter(i => i.userId === this.currentUser._id),
+                ...(foundData.items || []).filter(i => i.userId === this.currentUser._id)
+            ];
 
-  // 2. Create a list of promises to fetch matches for each user item
-  const matchPromises = userItems.map(item =>
-    fetch(`https://retri-my5g.onrender.com/api/items/${item._id}/matches`)
-      .then(res => res.json())
-      .then(data => data.success ? data.items : [])
-  );
+            if (userItems.length === 0) {
+                container.innerHTML = '<p>Report an item to see match suggestions.</p>';
+                return;
+            }
 
-  // 3. Wait for all match requests to complete
-  const results = await Promise.all(matchPromises);
-  const allSuggestions = results.flat(); // Flatten the array of arrays
+            // 2. Create a list of promises to fetch matches for each user item
+            const matchPromises = userItems.map(item =>
+                fetch(`https://retri-my5g.onrender.com/api/items/${item._id}/matches`)
+                    .then(res => {
+                        if (!res.ok) throw new Error("Match fetch failed");
+                        return res.json();
+                    })
+                    .then(data => data.success ? data.items : [])
+            );
 
-  // 4. Deduplicate suggestions (an item might be a match for multiple user items)
-  const uniqueSuggestions = [];
-  const seenIds = new Set();
+            // 3. Wait for all match requests to complete
+            const results = await Promise.all(matchPromises);
+            const allSuggestions = results.flat();
 
-  allSuggestions.forEach(item => {
-    if (!seenIds.has(item._id)) {
-      seenIds.add(item._id);
-      uniqueSuggestions.push(item);
-    } else {
-      // Optional: If seen before, keep the one with the higher match score
-      const existingIndex = uniqueSuggestions.findIndex(s => s._id === item._id);
-      if (item.matchScore > uniqueSuggestions[existingIndex].matchScore) {
-        uniqueSuggestions[existingIndex] = item;
-      }
+            // 4. Deduplicate suggestions (an item might be a match for multiple user items)
+            const uniqueSuggestions = [];
+            const seenIds = new Set();
+
+            allSuggestions.forEach(item => {
+                if (!seenIds.has(item._id)) {
+                    seenIds.add(item._id);
+                    uniqueSuggestions.push(item);
+                } else {
+                    const existingIndex = uniqueSuggestions.findIndex(s => s._id === item._id);
+                    if (item.matchScore > uniqueSuggestions[existingIndex].matchScore) {
+                        uniqueSuggestions[existingIndex] = item;
+                    }
+                }
+            });
+
+            // 5. Sort by match score (highest first) and take the top 5
+            uniqueSuggestions.sort((a, b) => b.matchScore - a.matchScore);
+            const topSuggestions = uniqueSuggestions.slice(0, 5);
+
+            // 6. Render the suggestions
+            if (topSuggestions.length > 0) {
+                container.innerHTML = topSuggestions.map(item => `
+                    <div class="item-list-card" onclick="app.showItemDetail('${item._id}')">
+                        <img src="${item.image}" alt="${item.title}" class="item-list-image">
+                        <div class="item-list-content">
+                            <div class="item-list-title">
+                                ${item.title} <span style="color: var(--color-success, #28a745);">(${item.matchScore}% Match)</span>
+                            </div>
+                            <div class="item-list-meta">${item.location} • ${item.date}</div> 
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                container.innerHTML = '<p>No potential matches found yet.</p>';
+            }
+        } catch (error) {
+            console.error("Match Suggestions Error:", error);
+            container.innerHTML = '<p style="color: #dc3545; text-align: center; font-weight: 500;">Connection timed out while waking up servers. Please hit refresh in a few seconds!</p>';
+        }
     }
-  });
-
-  // 5. Sort by match score (highest first) and take the top 5
-  uniqueSuggestions.sort((a, b) => b.matchScore - a.matchScore);
-  const topSuggestions = uniqueSuggestions.slice(0, 5);
-
-  // 6. Render the suggestions
-  if (topSuggestions.length > 0) {
-    container.innerHTML = topSuggestions.map(item => `
-      <div class="item-list-card" onclick="app.showItemDetail('${item._id}')">
-        <img src="${item.image}" alt="${item.title}" class="item-list-image">
-        <div class="item-list-content">
-          <div class="item-list-title">
-            ${item.title} <span style="color: var(--color-success);">(${item.matchScore}% match)</span>
-          </div>
-          <div class="item-list-meta">${item.location} • ${item.date}</div>
-        </div>
-      </div>
-    `).join('');
-  } else {
-    container.innerHTML = '<p>No potential matches found yet.</p>';
-  }
-}
 
 
     // ====== Contact Modal ======
