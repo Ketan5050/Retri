@@ -44,20 +44,27 @@ MAPPINGS_FILE = os.path.join(SCRIPT_DIR, "mappings.json")
 def load_persistence():
     """Load the Faiss index and mappings from disk if they exist."""
     global index, id_map, item_id_to_faiss_id
-    if os.path.exists(INDEX_FILE):
-        index = faiss.read_index(INDEX_FILE)
-        print(f"Loaded Faiss index with {index.ntotal} vectors.")
+    
+    if os.path.exists(INDEX_FILE) and os.path.getsize(INDEX_FILE) > 0:
+        try:
+            index = faiss.read_index(INDEX_FILE)
+            print(f"Loaded Faiss index with {index.ntotal} vectors.")
+        except Exception as e:
+            print(f"Error reading Faiss index ({e}). Starting fresh.")
     else:
-        print("No existing Faiss index found. Starting fresh.")
+        print("No existing Faiss index found (or file is empty). Starting fresh.")
 
-    if os.path.exists(MAPPINGS_FILE):
-        with open(MAPPINGS_FILE, 'r') as f:
-            data = json.load(f)
-            id_map = {int(k): v for k, v in data.get('id_map', {}).items()}
-            item_id_to_faiss_id = data.get('item_id_to_faiss_id', {})
-        print(f"Loaded mappings for {len(item_id_to_faiss_id)} items.")
+    if os.path.exists(MAPPINGS_FILE) and os.path.getsize(MAPPINGS_FILE) > 0:
+        try:
+            with open(MAPPINGS_FILE, 'r') as f:
+                data = json.load(f)
+                id_map = {int(k): v for k, v in data.get('id_map', {}).items()}
+                item_id_to_faiss_id = data.get('item_id_to_faiss_id', {})
+            print(f"Loaded mappings for {len(item_id_to_faiss_id)} items.")
+        except Exception as e:
+            print(f"Error reading mappings file ({e}). Starting fresh.")
     else:
-        print("No existing mappings found. Starting fresh.")
+        print("No existing mappings found (or file is empty). Starting fresh.")
 
 def save_persistence():
     """Save the Faiss index and mappings to disk."""
