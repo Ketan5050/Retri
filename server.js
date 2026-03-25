@@ -206,8 +206,13 @@ app.get("/api/items/:id/matches", async (req, res) => {
     // 3. Add the match score (distance) to the final items
     const finalItems = potentialMatchItems.map(item => {
       const matchInfo = matches.find(m => m.itemId === item._id.toString());
-      // Convert distance to a percentage score (0 distance = 100% match)
-      const matchScore = Math.round(Math.max(0, 1 - matchInfo.distance) * 100);
+      // Convert L2 squared distance to cosine similarity
+      // distance = 2 - 2 * cosineSimilarity => cosineSimilarity = 1 - (distance / 2)
+      const cosineSimilarity = 1 - (matchInfo.distance / 2);
+      
+      // Scale cosine similarity so that > 0.4 becomes a useful 0-100% score for users
+      const mappedScore = Math.max(0, (cosineSimilarity - 0.4) / 0.6);
+      const matchScore = Math.round(mappedScore * 100);
 
       return {
         ...item.toObject(),

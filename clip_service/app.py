@@ -138,6 +138,10 @@ def add_item():
         if text_embedding is None or image_embedding is None:
             return jsonify({"error": "Failed to generate embeddings"}), 500
 
+        # Normalize individual vectors before averaging so one doesn't dominate
+        faiss.normalize_L2(text_embedding.reshape(1, -1))
+        faiss.normalize_L2(image_embedding.reshape(1, -1))
+        
         # Combine embeddings by averaging them. This is a simple but effective strategy.
         combined_embedding = np.mean([text_embedding, image_embedding], axis=0)
         
