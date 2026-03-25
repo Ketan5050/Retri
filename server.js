@@ -1,0 +1,333 @@
+// server.js
+
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
+const axios = require("axios");
+const nodemailer = require("nodemailer");
+require("dotenv").config();
+
+const app = express();
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
+
+// SMTP Configuration
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '10mb' })); // Increase limit for image uploads
+
+// MongoDB connection - Using MongoDB Atlas
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log("MongoDB Atlas Connected"))
+  .catch(err => console.error(err));
+
+// Schemas
+const userSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, unique: true },
+  phone: String,
+  password: String
+});
+
+const itemSchema = new mongoose.Schema({
+  title: String,
+  category: String,
+  description: String,
+  location: String,
+  type: String,  // "lost" or "found"
+  date: String,
+  contactInfo: String,
+  userId: String,
+  image: String
+});
+
+const User = mongoose.model("User", userSchema);
+const Item = mongoose.model("Item", itemSchema);
+
+// Routes
+// ✅ Register
+// Password validation function
+function isValidPassword(password) {
+  const minLength = 8;
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasNumber = /\d/.test(password);
+  const hasSpecial = /[@$!%*?&]/.test(password);
+
+  return (
+    password.length >= minLength &&
+    hasUpper &&
+    hasLower &&
+    hasNumber &&
+    hasSpecial
+  );
+}
+
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
+
+    // 🔹 validate password
+    if (!isValidPassword(password)) {
+      return res.json({
+        success: false,
+        message:
+          "Password must be at least 8 characters long and include uppercase, lowercase, number, and special character."
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const user = new User({
+      name,
+      email,
+      phone,
+      password: hashedPassword
+    });
+
+    await user.save();
+    res.json({ success: true, user });
+  } catch (err) {
+    if (err.code === 11000) {
+      res.json({ success: false, message: "Email already registered" });
+    } else {
+      res.json({ success: false, message: "Registration failed" });
+    }
+  }
+});
+
+
+// ✅ Login
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.json({ success: false, message: "Invalid email or password" });
+    }
+
+    // compare plain password with hashed password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.json({ success: false, message: "Invalid email or password" });
+    }
+
+    res.json({ success: true, user });
+  } catch (err) {
+    res.json({ success: false, message: "Login failed" });
+  }
+});
+
+
+// // ✅ Get items by type
+app.get("/api/items", async (req, res) => {
+  try {
+    const { type } = req.query;
+    if (!type) {
+      return res.json({ success: false, message: "Type parameter is required" });
+    }
+    const items = await Item.find({ type });
+    res.json({ success: true, items });
+  } catch (err) {
+    console.error("Error fetching items:", err);
+    res.json({ success: false, message: "Failed to fetch items" });
+  }
+});
+
+// // ✅ Create item
+app.post("/api/items", async (req, res) => {
+  try {
+    const item = new Item(req.body);
+    await item.save();
+    try {
+      await axios.post(`${AI_SERVICE_URL}/add_item`, {
+        itemId: item._id.toString(),
+        title: item.title,
+        description: item.description,
+        imageUrl: item.image
+      });
+      console.log(`Item ${item._id} sent to AI service for indexing.`);
+    } catch (aiError) {
+      console.error(`Failed to index item ${item._id} in AI service:`
+        , aiError.message);
+    }
+
+    res.json({ success: true, item });
+  } catch (err) {
+    console.error("Error saving item:", err);
+    res.json({ success: false, message: "Failed to save item" });
+  }
+});
+
+// // ✅ Get items
+app.get("/api/items/:id/matches", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const originalItem = await Item.findById(id);
+
+    if (!originalItem) {
+      return res.json({ success: false, message: "Original item not found" });
+    }
+
+    // Determine the opposite type to search for.
+    const oppositeType = originalItem.type === 'lost' ? 'found' : 'lost';
+
+    // 1. Get match IDs from the Python AI service using find_matches for better similarity
+    const response = await axios.get(`${AI_SERVICE_URL}/find_matches`, {
+      params: { item_id: id }
+    });
+    const matches = response.data.matches || []; // e.g., [{ itemId: "...", distance: 0.1 }, ...]
+
+    if (matches.length === 0) {
+      return res.json({ success: true, items: [] });
+    }
+
+    const matchIds = matches.map(m => m.itemId);
+
+    // 2. Fetch the full item details for the matches from MongoDB
+    const potentialMatchItems = await Item.find({
+      '_id': { $in: matchIds }, // Find all items whose ID is in our matched list
+      'type': oppositeType,     // Only include items of the opposite type
+      'userId': { $ne: originalItem.userId } // Exclude items reported by the same user
+    });
+
+    // 3. Add the match score (distance) to the final items
+    const finalItems = potentialMatchItems.map(item => {
+      const matchInfo = matches.find(m => m.itemId === item._id.toString());
+      // Convert distance to a percentage score (0 distance = 100% match)
+      const matchScore = Math.round(Math.max(0, 1 - matchInfo.distance) * 100);
+
+      return {
+        ...item.toObject(),
+        matchScore: matchScore
+      };
+    });
+
+    // 4. Send emails if match score >= 80
+    for (const item of finalItems) {
+      if (item.matchScore >= 80) {
+        try {
+          const originalUser = await User.findById(originalItem.userId);
+          const matchedUser = await User.findById(item.userId);
+
+          if (originalUser && matchedUser) {
+            const mailOptions = {
+              from: process.env.SMTP_USER || 'retrievix01@gmail.com',
+              to: [originalUser.email, matchedUser.email],
+              subject: 'Potential Match Found for Your Item!',
+              html: `
+                <h2>Great News!</h2>
+                <p>We found a potential match for your item with a high similarity score.</p>
+                <h3>Your Item:</h3>
+                <p><strong>Title:</strong> ${originalItem.title}</p>
+                <p><strong>Description:</strong> ${originalItem.description}</p>
+                <p><strong>Location:</strong> ${originalItem.location}</p>
+                <p><strong>Contact:</strong> ${originalUser.name} - ${originalUser.email} - ${originalUser.phone}</p>
+                <h3>Matched Item:</h3>
+                <p><strong>Title:</strong> ${item.title}</p>
+                <p><strong>Description:</strong> ${item.description}</p>
+                <p><strong>Location:</strong> ${item.location}</p>
+                <p><strong>Contact:</strong> ${matchedUser.name} - ${matchedUser.email} - ${matchedUser.phone}</p>
+                <p><strong>Match Score:</strong> ${item.matchScore}%</p>
+                <p>Please contact each other to verify and arrange the return.</p>
+                <p>Best regards,<br>Retrievix Team</p>
+              `
+            };
+
+            await transporter.sendMail(mailOptions);
+            console.log(`Email sent for match between ${originalItem._id} and ${item._id}`);
+          }
+        } catch (emailError) {
+          console.error('Error sending email:', emailError.message);
+        }
+      }
+    }
+
+    res.json({ success: true, items: finalItems });
+
+  } catch (err) {
+    console.error("Error fetching matches:", err.message);
+    res.json({ success: false, message: "Failed to fetch matches" });
+  }
+});
+
+// ✅ Search items
+app.get("/api/items/search", async (req, res) => {
+  try {
+    const { query, type, userId } = req.query;
+
+    if (!query) {
+      return res.json({ success: false, message: "Query parameter is required" });
+    }
+
+    // Create regex for case-insensitive search
+    const searchRegex = new RegExp(query, 'i');
+
+    // Build search query
+    const searchQuery = {
+      $or: [
+        { title: { $regex: searchRegex } },
+        { description: { $regex: searchRegex } }
+      ]
+    };
+
+    // Add type filter if provided
+    if (type) {
+      searchQuery.type = type;
+    }
+
+    // Exclude user's own items if userId is provided
+    if (userId) {
+      searchQuery.userId = { $ne: userId };
+    }
+
+    // Search items directly from database
+    const items = await Item.find(searchQuery);
+
+    res.json({ success: true, items });
+
+  } catch (err) {
+    console.error("Error searching items:", err.message);
+    res.json({ success: false, message: "Failed to search items" });
+  }
+});
+
+
+
+// ✅ Delete item
+app.delete("/api/items/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const item = await Item.findById(id);
+
+    if (!item) {
+      return res.json({ success: false, message: "Item not found" });
+    }
+
+    // Check if user owns the item
+    if (item.userId !== req.body.userId) {
+      return res.json({ success: false, message: "Unauthorized to delete this item" });
+    }
+
+    await Item.findByIdAndDelete(id);
+    res.json({ success: true, message: "Item deleted successfully" });
+  } catch (err) {
+    res.json({ success: false, message: "Failed to delete item" });
+  }
+});
+
+// Start server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`))
