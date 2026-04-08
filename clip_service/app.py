@@ -113,6 +113,14 @@ def get_text_embedding(text):
 
 # --- API Endpoints ---
 
+@app.route("/status", methods=["GET"])
+def get_status():
+    """
+    Returns the list of item IDs currently in the AI index.
+    Used by the node server to gentle-sync lost items.
+    """
+    return jsonify({"indexed_ids": list(item_id_to_faiss_id.keys())})
+
 @app.route("/add_item", methods=["POST"])
 def add_item():
     """

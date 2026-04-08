@@ -17,10 +17,7 @@ const GOOGLE_APPS_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbwi9
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Increase limit for image uploads
 
-// MongoDB connection - Using MongoDB Atlas
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log("MongoDB Atlas Connected"))
-  .catch(err => console.error(err));
+// Wait to connect to MongoDB until schemas are defined below
 
 // Schemas
 const userSchema = new mongoose.Schema({
@@ -44,6 +41,59 @@ const itemSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", userSchema);
 const Item = mongoose.model("Item", itemSchema);
+
+// MongoDB connection - Using MongoDB Atlas
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log("MongoDB Atlas Connected");
+    // Kick off gentle background sync when server wakes up
+    syncAiService();
+  })
+  .catch(err => console.error(err));
+
+// Add a function to gently sync missing AI items on Startup without blocking or loops
+async function syncAiService() {
+  try {
+    console.log("Checking AI service sync status...");
+    const items = await Item.find({});
+    if (items.length === 0) return;
+    
+    let aiStatus;
+    try {
+      const res = await axios.get(`${AI_SERVICE_URL}/status`);
+      aiStatus = res.data.indexed_ids || [];
+    } catch (apiErr) {
+      console.log("AI Service not yet awake. Retrying sync in 15s...");
+      setTimeout(syncAiService, 15000);
+      return;
+    }
+
+    const missingItems = items.filter(item => !aiStatus.includes(item._id.toString()));
+    
+    if (missingItems.length > 0) {
+      console.log(`Found ${missingItems.length} items missing in AI index. Re-syncing slowly in background...`);
+      for (const item of missingItems) {
+        try {
+          await axios.post(`${AI_SERVICE_URL}/add_item`, {
+            itemId: item._id.toString(),
+            title: item.title,
+            description: item.description,
+            imageUrl: item.image
+          });
+          console.log(`Synced missing item ${item._id} to AI.`);
+          await new Promise(r => setTimeout(r, 1500)); // Sleep 1.5s to respect free computing limits
+        } catch (err) {
+          console.error(`Failed to sync item ${item._id}:`, err.message);
+        }
+      }
+      console.log("AI Sync complete!");
+    } else {
+      console.log("AI service is fully synced with database.");
+    }
+  } catch (err) {
+    console.error("Error during AI sync loop:", err.message);
+  }
+}
 
 // Routes
 // ✅ Register
