@@ -269,6 +269,10 @@ app.get("/api/items/:id/matches", async (req, res) => {
           const matchedUser = await User.findById(item.userId);
 
           if (originalUser && matchedUser) {
+            // Generate the confirmation link
+            const backendUrl = req.protocol + '://' + req.get('host');
+            const confirmationLink = `${backendUrl}/api/items/confirm-match/${originalItem._id}/${item._id}`;
+
             const mailOptions = {
               from: process.env.SMTP_USER || 'retrievix01@gmail.com',
               to: [originalUser.email, matchedUser.email],
@@ -287,6 +291,13 @@ app.get("/api/items/:id/matches", async (req, res) => {
                 <p><strong>Location:</strong> ${item.location}</p>
                 <p><strong>Contact:</strong> ${matchedUser.name} - ${matchedUser.email} - ${matchedUser.phone}</p>
                 <p><strong>Match Score:</strong> ${item.matchScore}%</p>
+                <br>
+                <div style="background-color: #f8f9fa; border: 1px solid #ddd; padding: 20px; border-radius: 8px; text-align: center;">
+                  <h3 style="margin-top: 0; color: #333;">Did you receive your item?</h3>
+                  <p style="color: #555;">If you have successfully met and claimed your item, please click the button below. This will tell our system that the item has been returned to its owner and securely remove the item from our database to prevent future alerts.</p>
+                  <a href="${confirmationLink}" style="display: inline-block; padding: 12px 24px; color: #ffffff; background-color: #28a745; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px;">Confirm Item is Mine & Remove</a>
+                </div>
+                <br>
                 <p>Please contact each other to verify and arrange the return.</p>
                 <p>Best regards,<br>Retrievix Team</p>
               `
@@ -308,6 +319,50 @@ app.get("/api/items/:id/matches", async (req, res) => {
   } catch (err) {
     console.error("Error fetching matches:", err.message);
     res.json({ success: false, message: "Failed to fetch matches" });
+  }
+});
+
+// ✅ Confirm Match and Delete Items (Triggered from Email)
+app.get("/api/items/confirm-match/:id1/:id2", async (req, res) => {
+  try {
+    const { id1, id2 } = req.params;
+    
+    // Delete both items from the database
+    const deleted1 = await Item.findByIdAndDelete(id1);
+    const deleted2 = await Item.findByIdAndDelete(id2);
+
+    if (deleted1 || deleted2) {
+      res.send(`
+        <html>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f4f7f6;">
+            <div style="background-color: white; padding: 40px; border-radius: 10px; max-width: 500px; margin: 0 auto; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+              <h2 style="color: #28a745;">✅ Match Confirmed!</h2>
+              <p style="font-size: 18px; color: #333;">The items have been successfully securely removed from our database.</p>
+              <p style="color: #555;">Thank you for using Retrievix to find your belongings. We're glad we could help!</p>
+              <br/>
+              <p style="color: #777; font-size: 14px;">You may now close this window.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    } else {
+      res.send(`
+        <html>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f4f7f6;">
+            <div style="background-color: white; padding: 40px; border-radius: 10px; max-width: 500px; margin: 0 auto; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+              <h2 style="color: #6c757d;">Already Processed</h2>
+              <p style="font-size: 18px; color: #333;">These items have already been removed or cannot be found.</p>
+              <p style="color: #555;">They may have been deleted by the other user first.</p>
+              <br/>
+              <p style="color: #777; font-size: 14px;">You may now close this window.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+  } catch (err) {
+    console.error("Error confirming match & deleting items:", err);
+    res.status(500).send("An error occurred while confirming the match. Please try again later.");
   }
 });
 
