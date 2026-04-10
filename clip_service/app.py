@@ -17,13 +17,19 @@ import torch
 # 1. Initialize Flask App
 app = Flask(__name__)
 
-# 2. Load CLIP Model and Processor
-# This will download the model on first run. It's a one-time setup.
-MODEL_NAME = "openai/clip-vit-base-patch32"
-print("Loading CLIP model... This may take a moment.")
-model = CLIPModel.from_pretrained(MODEL_NAME)
-processor = CLIPProcessor.from_pretrained(MODEL_NAME)
-print("CLIP model loaded successfully.")
+# 2. Lazy Load CLIP Model and Processor
+# We lazy-load this so the Flask app can start instantly and pass Hugging Face health checks
+model = None
+processor = None
+
+def load_clip_model():
+    global model, processor
+    if model is None or processor is None:
+        print("Loading CLIP model from Hugging Face... This will take a few minutes for the first request.", flush=True)
+        MODEL_NAME = "openai/clip-vit-base-patch32"
+        model = CLIPModel.from_pretrained(MODEL_NAME)
+        processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+        print("CLIP model loaded successfully.", flush=True)
 
 # 3. Initialize Vector Database (Faiss)
 # The dimension of the vectors produced by the CLIP model is 512.
@@ -89,6 +95,7 @@ def save_persistence():
 def get_image_embedding(image_url):
     """Downloads an image, processes it, and returns its embedding."""
     try:
+        load_clip_model()
         if image_url.startswith('data:'):
             # Handle data URL
             header, encoded = image_url.split(',', 1)
@@ -109,6 +116,7 @@ def get_image_embedding(image_url):
 def get_text_embedding(text):
     """Processes text and returns its embedding."""
     try:
+        load_clip_model()
         inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=77)
         with torch.no_grad():
             text_features = model.get_text_features(input_ids=inputs.input_ids)
