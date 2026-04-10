@@ -57,7 +57,7 @@ async function syncAiService() {
     console.log("Checking AI service sync status...");
     const items = await Item.find({});
     if (items.length === 0) return;
-    
+
     let aiStatus;
     try {
       const res = await axios.get(`${AI_SERVICE_URL}/status`);
@@ -69,7 +69,7 @@ async function syncAiService() {
     }
 
     const missingItems = items.filter(item => !aiStatus.includes(item._id.toString()));
-    
+
     if (missingItems.length > 0) {
       console.log(`Found ${missingItems.length} items missing in AI index. Re-syncing slowly in background...`);
       for (const item of missingItems) {
@@ -92,16 +92,6 @@ async function syncAiService() {
     }
   } catch (err) {
     console.error("Error during AI sync loop:", err.message);
-  }
-}
-
-// Helper to gracefully remove items from AI service without crashing main process
-async function deleteFromAiService(itemId) {
-  try {
-    await axios.delete(`${AI_SERVICE_URL}/delete_item/${itemId}`);
-    console.log(`Successfully purged item ${itemId} from AI service.`);
-  } catch (err) {
-    console.error(`Failed to purge item ${itemId} from AI service:`, err.message);
   }
 }
 
@@ -260,7 +250,7 @@ app.get("/api/items/:id/matches", async (req, res) => {
       // Convert L2 squared distance to cosine similarity
       // distance = 2 - 2 * cosineSimilarity => cosineSimilarity = 1 - (distance / 2)
       const cosineSimilarity = 1 - (matchInfo.distance / 2);
-      
+
       // Scale cosine similarity so that > 0.4 becomes a useful 0-100% score for users
       const mappedScore = Math.max(0, (cosineSimilarity - 0.4) / 0.6);
       const matchScore = Math.round(mappedScore * 100);
@@ -336,14 +326,10 @@ app.get("/api/items/:id/matches", async (req, res) => {
 app.get("/api/items/confirm-match/:id1/:id2", async (req, res) => {
   try {
     const { id1, id2 } = req.params;
-    
+
     // Delete both items from the database
     const deleted1 = await Item.findByIdAndDelete(id1);
     const deleted2 = await Item.findByIdAndDelete(id2);
-
-    // Also purge both from AI service so they don't remain as ghosts
-    if (deleted1) await deleteFromAiService(id1);
-    if (deleted2) await deleteFromAiService(id2);
 
     if (deleted1 || deleted2) {
       res.send(`
@@ -439,10 +425,6 @@ app.delete("/api/items/:id", async (req, res) => {
     }
 
     await Item.findByIdAndDelete(id);
-    
-    // Purge from AI service
-    await deleteFromAiService(id);
-
     res.json({ success: true, message: "Item deleted successfully" });
   } catch (err) {
     res.json({ success: false, message: "Failed to delete item" });

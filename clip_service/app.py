@@ -17,33 +17,24 @@ import torch
 # 1. Initialize Flask App
 app = Flask(__name__)
 
-# 2. Lazy Load CLIP Model and Processor
-# We lazy-load this so the Flask app can start instantly and pass Hugging Face health checks
-model = None
-processor = None
-
-def load_clip_model():
-    global model, processor
-    if model is None or processor is None:
-        print("Loading CLIP model from Hugging Face... This will take a few minutes for the first request.", flush=True)
-        MODEL_NAME = "openai/clip-vit-base-patch32"
-        model = CLIPModel.from_pretrained(MODEL_NAME)
-        processor = CLIPProcessor.from_pretrained(MODEL_NAME)
-        print("CLIP model loaded successfully.", flush=True)
+# 2. Load CLIP Model and Processor
+# This will download the model on first run. It's a one-time setup.
+MODEL_NAME = "openai/clip-vit-base-patch32"
+print("Loading CLIP model... This may take a moment.")
+model = CLIPModel.from_pretrained(MODEL_NAME)
+processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+print("CLIP model loaded successfully.")
 
 # 3. Initialize Vector Database (Faiss)
 # The dimension of the vectors produced by the CLIP model is 512.
 EMBEDDING_DIM = 512
-# Using IndexFlatL2 for Euclidean distance search, wrapped in IndexIDMap
-# IndexIDMap allows us to assign custom 64-bit integer IDs to vectors and remove them later.
-base_index = faiss.IndexFlatL2(EMBEDDING_DIM)
-index = faiss.IndexIDMap2(base_index)
+# Using a simple IndexFlatL2 for Euclidean distance search.
+index = faiss.IndexFlatL2(EMBEDDING_DIM)
 
-# 4. In-memory storage for mapping
-# FAISS needs numeric IDs. We'll map our string MongoDB `item_id` to an auto-incrementing numeric `faiss_id`.
+# 4. In-memory storage for mapping Faiss index IDs to our database item IDs
+# This is a simple approach for this guide. For production, you'd use a persistent key-value store.
+id_map = {}
 item_id_to_faiss_id = {}
-id_map = {} # Maps numeric faiss_id back to string item_id
-next_faiss_id = 0 # Counter for generating new unique IDs
 
 # 5. Persistence setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,8 +60,6 @@ def load_persistence():
                 data = json.load(f)
                 id_map = {int(k): v for k, v in data.get('id_map', {}).items()}
                 item_id_to_faiss_id = data.get('item_id_to_faiss_id', {})
-                global next_faiss_id
-                next_faiss_id = data.get('next_faiss_id', 0)
             print(f"Loaded mappings for {len(item_id_to_faiss_id)} items.")
         except Exception as e:
             print(f"Error reading mappings file ({e}). Starting fresh.")
@@ -82,7 +71,6 @@ def save_persistence():
     faiss.write_index(index, INDEX_FILE)
     with open(MAPPINGS_FILE, 'w') as f:
         json.dump({
-            'next_faiss_id': next_faiss_id,
             'id_map': id_map,
             'item_id_to_faiss_id': item_id_to_faiss_id
         }, f)
@@ -95,7 +83,6 @@ def save_persistence():
 def get_image_embedding(image_url):
     """Downloads an image, processes it, and returns its embedding."""
     try:
-        load_clip_model()
         if image_url.startswith('data:'):
             # Handle data URL
             header, encoded = image_url.split(',', 1)
@@ -116,7 +103,6 @@ def get_image_embedding(image_url):
 def get_text_embedding(text):
     """Processes text and returns its embedding."""
     try:
-        load_clip_model()
         inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True, max_length=77)
         with torch.no_grad():
             text_features = model.get_text_features(input_ids=inputs.input_ids)
@@ -126,11 +112,6 @@ def get_text_embedding(text):
         return None
 
 # --- API Endpoints ---
-
-@app.route("/", methods=["GET"])
-def root():
-    """Health check endpoint for Hugging Face Spaces."""
-    return jsonify({"status": "running"}), 200
 
 @app.route("/status", methods=["GET"])
 def get_status():
@@ -175,14 +156,11 @@ def add_item():
         # Normalize the vector for consistent distance metrics
         faiss.normalize_L2(combined_embedding.reshape(1, -1))
 
-        global next_faiss_id
-        faiss_id = next_faiss_id
-        next_faiss_id += 1
+        # Add to Faiss index
+        index.add(combined_embedding.reshape(1, -1).astype('float32'))
         
-        # Add to Faiss index with specific integer ID
-        index.add_with_ids(combined_embedding.reshape(1, -1).astype('float32'), np.array([faiss_id], dtype=np.int64))
-        
-        # Map IDs
+        # The ID in the Faiss index is its position. We store this position.
+        faiss_id = index.ntotal - 1
         id_map[faiss_id] = item_id
         item_id_to_faiss_id[item_id] = faiss_id
 
@@ -235,39 +213,6 @@ def search():
         print(f"An error occurred in /search: {e}")
         return jsonify({"error": "An internal server error occurred"}), 500
 
-@app.route("/delete_item/<item_id>", methods=["DELETE"])
-def delete_item(item_id):
-    """
-    Removes an item from the Faiss index and mapping.
-    This solves the 'ghost vectors' problem by permanently deleting deleted Mongo items.
-    """
-    try:
-        if not item_id:
-            return jsonify({"error": "item_id parameter is required"}), 400
-
-        faiss_id = item_id_to_faiss_id.get(item_id)
-        
-        if faiss_id is None:
-            # We don't consider missing an error, simply a no-op that's already resolved.
-            return jsonify({"status": "success", "message": "Item already removed or not found"}), 200
-
-        # Remove from Faiss using the numeric ID
-        index.remove_ids(np.array([faiss_id], dtype=np.int64))
-
-        # Cleanup mappings safely
-        item_id_to_faiss_id.pop(item_id, None)
-        id_map.pop(faiss_id, None)
-
-        print(f"Successfully deleted item {item_id} (FAISS ID: {faiss_id}) from index. Total items left: {index.ntotal}")
-        
-        # Save persistence
-        save_persistence()
-
-        return jsonify({"status": "success", "itemId": item_id}), 200
-
-    except Exception as e:
-        print(f"An error occurred in /delete_item: {e}")
-        return jsonify({"error": "An internal server error occurred"}), 500
 
 @app.route("/find_matches", methods=["GET"])
 def find_matches():
@@ -323,6 +268,5 @@ if __name__ == "__main__":
     load_persistence()
 
     # Running in debug mode is convenient for development but should be disabled for production.
-    # Hugging Face Spaces strictly requires listening on port 7860
-    port = int(os.environ.get("PORT", 7860))
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port, debug=False)
