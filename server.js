@@ -95,6 +95,16 @@ async function syncAiService() {
   }
 }
 
+// Helper to gracefully remove items from AI service without crashing main process
+async function deleteFromAiService(itemId) {
+  try {
+    await axios.delete(`${AI_SERVICE_URL}/delete_item/${itemId}`);
+    console.log(`Successfully purged item ${itemId} from AI service.`);
+  } catch (err) {
+    console.error(`Failed to purge item ${itemId} from AI service:`, err.message);
+  }
+}
+
 // Routes
 // ✅ Register
 // Password validation function
@@ -331,6 +341,10 @@ app.get("/api/items/confirm-match/:id1/:id2", async (req, res) => {
     const deleted1 = await Item.findByIdAndDelete(id1);
     const deleted2 = await Item.findByIdAndDelete(id2);
 
+    // Also purge both from AI service so they don't remain as ghosts
+    if (deleted1) await deleteFromAiService(id1);
+    if (deleted2) await deleteFromAiService(id2);
+
     if (deleted1 || deleted2) {
       res.send(`
         <html>
@@ -425,6 +439,10 @@ app.delete("/api/items/:id", async (req, res) => {
     }
 
     await Item.findByIdAndDelete(id);
+    
+    // Purge from AI service
+    await deleteFromAiService(id);
+
     res.json({ success: true, message: "Item deleted successfully" });
   } catch (err) {
     res.json({ success: false, message: "Failed to delete item" });
