@@ -119,6 +119,11 @@ def get_text_embedding(text):
 
 # --- API Endpoints ---
 
+@app.route("/", methods=["GET"])
+def root():
+    """Health check endpoint for Hugging Face Spaces."""
+    return jsonify({"status": "running"}), 200
+
 @app.route("/status", methods=["GET"])
 def get_status():
     """
@@ -310,5 +315,6 @@ if __name__ == "__main__":
     load_persistence()
 
     # Running in debug mode is convenient for development but should be disabled for production.
-    port = int(os.environ.get("PORT", 8000))
+    # Hugging Face Spaces strictly requires listening on port 7860
+    port = int(os.environ.get("PORT", 7860))
     app.run(host="0.0.0.0", port=port, debug=False)
